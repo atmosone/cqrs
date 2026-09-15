@@ -4,20 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 )
 
-var ErrUnimplementedHandler = errors.New("cqrs: unimplemented handler")
-
 type commandBus struct {
-	bus map[CommandType]CommandHandlerFunc
+	logger *slog.Logger
+	bus    map[CommandType]CommandHandlerFunc
+	mu     sync.RWMutex
 }
 
-func NewCommandBus() CommandBus {
-	return &commandBus{bus: make(map[CommandType]CommandHandlerFunc)}
+func NewCommandBus(logger *slog.Logger) CommandBus {
+	return &commandBus{
+		logger: logger,
+		bus:    make(map[CommandType]CommandHandlerFunc),
+		mu:     sync.RWMutex{},
+	}
 }
 
 // Types implements [CommandHandler].
 func (cb *commandBus) Types() []CommandType {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
 	types := make([]CommandType, 0, len(cb.bus))
 	for t := range cb.bus {
 		types = append(types, t)
@@ -27,7 +35,9 @@ func (cb *commandBus) Types() []CommandType {
 
 // Handle implements [CommandHandler].
 func (cb *commandBus) Handle(ctx context.Context, c Command) ([]Event, error) {
+	cb.mu.RLock()
 	f, ok := cb.bus[c.Type()]
+	cb.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("%w (%T)", ErrUnimplementedHandler, c)
 	}
@@ -37,12 +47,22 @@ func (cb *commandBus) Handle(ctx context.Context, c Command) ([]Event, error) {
 // HandleFunc implements [CommandBus].
 func (cb *commandBus) HandleFunc(t CommandType, f CommandHandlerFunc) {
 	if f == nil {
+		cb.logger.
+			With(slog.String("command_type", t.String())).
+			Debug("unimplemented CommandHandlerFunc")
 		return
 	}
-	cb.bus[t] = func(ctx context.Context, c Command) ([]Event, error) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.bus[t] = func(ctx context.Context, c Command) (events []Event, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("panic in %T handler func: %v\n", c, r)
+				cb.logger.With(
+					slog.String("trace_id", Trace(ctx).String()),
+					slog.String("command_type", c.Type().String()),
+					slog.Any("panic", r),
+				).Error("panic in command handler func")
+				err = fmt.Errorf("%w (%v)", ErrPanicRecovered, r)
 			}
 		}()
 		return f(ctx, c)
@@ -50,15 +70,23 @@ func (cb *commandBus) HandleFunc(t CommandType, f CommandHandlerFunc) {
 }
 
 type queryBus struct {
-	bus map[QueryType]QueryHandlerFunc
+	logger *slog.Logger
+	bus    map[QueryType]QueryHandlerFunc
+	mu     sync.RWMutex
 }
 
-func NewQueryBus() QueryBus {
-	return &queryBus{bus: make(map[QueryType]QueryHandlerFunc)}
+func NewQueryBus(logger *slog.Logger) QueryBus {
+	return &queryBus{
+		logger: logger,
+		bus:    make(map[QueryType]QueryHandlerFunc),
+		mu:     sync.RWMutex{},
+	}
 }
 
 // Types implements [QueryHandler].
 func (qb *queryBus) Types() []QueryType {
+	qb.mu.RLock()
+	defer qb.mu.RUnlock()
 	types := make([]QueryType, 0, len(qb.bus))
 	for t := range qb.bus {
 		types = append(types, t)
@@ -69,12 +97,22 @@ func (qb *queryBus) Types() []QueryType {
 // HandleFunc implements [QueryBus].
 func (qb *queryBus) HandleFunc(t QueryType, f QueryHandlerFunc) {
 	if f == nil {
+		qb.logger.
+			With(slog.String("query_type", t.String())).
+			Debug("unimplemented QueryHandlerFunc")
 		return
 	}
-	qb.bus[t] = func(ctx context.Context, q Query) (Result, error) {
+	qb.mu.Lock()
+	defer qb.mu.Unlock()
+	qb.bus[t] = func(ctx context.Context, q Query) (result Result, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("panic in %T handler func: %v\n", q, r)
+				qb.logger.With(
+					slog.String("trace_id", Trace(ctx).String()),
+					slog.String("query_type", q.Type().String()),
+					slog.Any("panic", r),
+				).Error("panic in query handler func")
+				err = fmt.Errorf("%w (%v)", ErrPanicRecovered, r)
 			}
 		}()
 		return f(ctx, q)
@@ -83,23 +121,33 @@ func (qb *queryBus) HandleFunc(t QueryType, f QueryHandlerFunc) {
 
 // Handle implements [QueryHandler].
 func (qb *queryBus) Handle(ctx context.Context, q Query) (Result, error) {
+	qb.mu.RLock()
 	f, ok := qb.bus[q.Type()]
+	qb.mu.RUnlock()
 	if !ok {
-		return Result{}, fmt.Errorf("%w (%T)", ErrUnimplementedHandler, q)
+		return nil, fmt.Errorf("%w (%T)", ErrUnimplementedHandler, q)
 	}
 	return f(ctx, q)
 }
 
 type eventBus struct {
-	bus map[EventType][]EventHandlerFunc
+	logger *slog.Logger
+	bus    map[EventType][]EventHandlerFunc
+	mu     sync.RWMutex
 }
 
-func NewEventBus() EventBus {
-	return &eventBus{bus: make(map[EventType][]EventHandlerFunc)}
+func NewEventBus(logger *slog.Logger) EventBus {
+	return &eventBus{
+		logger: logger,
+		bus:    make(map[EventType][]EventHandlerFunc),
+		mu:     sync.RWMutex{},
+	}
 }
 
 // Types implements [EventHandler].
 func (eb *eventBus) Types() []EventType {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
 	types := make([]EventType, 0, len(eb.bus))
 	for t := range eb.bus {
 		types = append(types, t)
@@ -110,12 +158,22 @@ func (eb *eventBus) Types() []EventType {
 // HandleFunc implements [EventBus].
 func (eb *eventBus) HandleFunc(t EventType, f EventHandlerFunc) {
 	if f == nil {
+		eb.logger.
+			With(slog.String("event_type", t.String())).
+			Debug("unimplemented EventHandlerFunc")
 		return
 	}
-	eb.bus[t] = append(eb.bus[t], func(ctx context.Context, e Event) error {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	eb.bus[t] = append(eb.bus[t], func(ctx context.Context, e Event) (err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("panic in %T handler func: %v\n", e, r)
+				eb.logger.With(
+					slog.String("trace_id", Trace(ctx).String()),
+					slog.String("event_type", e.Type().String()),
+					slog.Any("panic", r),
+				).Error("panic in event handler func")
+				err = fmt.Errorf("%w (%v)", ErrPanicRecovered, r)
 			}
 		}()
 		return f(ctx, e)
@@ -124,13 +182,24 @@ func (eb *eventBus) HandleFunc(t EventType, f EventHandlerFunc) {
 
 // Handle implements [EventHandler].
 func (eb *eventBus) Handle(ctx context.Context, e Event) error {
+	eb.mu.RLock()
 	handlers := eb.bus[e.Type()]
+	eb.mu.RUnlock()
 	if len(handlers) == 0 {
+		eb.logger.With(
+			slog.String("trace_id", Trace(ctx).String()),
+			slog.String("event_type", e.Type().String()),
+		).Debug("no handlers registered for event")
 		return nil
 	}
 	var errs []error
 	for _, f := range handlers {
 		if err := f(ctx, e); err != nil {
+			eb.logger.With(
+				slog.String("trace_id", Trace(ctx).String()),
+				slog.String("event_type", e.Type().String()),
+				slog.Any("error", err),
+			).Error("failed to handle event")
 			errs = append(errs, err)
 		}
 	}

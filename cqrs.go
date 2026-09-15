@@ -33,9 +33,9 @@ func (qt QueryType) String() string { return string(qt) }
 // Query
 type Query interface{ Type() QueryType }
 
-type Result struct {
-	Data  any    `json:"data"`
-	Error string `json:"error"`
+type Result interface {
+	Data() any
+	Error() error
 }
 
 // QueryHandlerFunc
@@ -61,7 +61,6 @@ func (et EventType) String() string { return string(et) }
 // Event
 type Event interface {
 	Type() EventType
-	String() string
 }
 
 // EventHandlerFunc

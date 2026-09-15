@@ -10,30 +10,30 @@ import (
 	"github.com/atmosone/cqrs"
 )
 
-type Decoder struct{}
+type Codec struct{}
 
-// DecodeCommand implements [cqrs.Decoder].
-func (d *Decoder) DecodeCommand(ct cqrs.CommandType, r *http.Request) (cqrs.Command, error) {
-	switch ct {
-	case CommandTypeCreateNote:
-		return CreateNoteCommand{}, nil
-	default:
-		return nil, cqrs.ErrUnknownCommandType
-	}
+// DecodeCommand implements [cqrs.Codec].
+func (c *Codec) DecodeCommand(cqrs.CommandType, []byte) (cqrs.Command, error) {
+	panic("unimplemented")
 }
 
-// DecodeQuery implements [cqrs.Decoder].
-func (d *Decoder) DecodeQuery(qt cqrs.QueryType, r *http.Request) (cqrs.Query, error) {
-	switch qt {
-	case QueryTypeNotes:
-		return NotesQuery{}, nil
-	default:
-		return nil, cqrs.ErrUnknownQueryType
-	}
+// DecodeQuery implements [cqrs.Codec].
+func (c *Codec) DecodeQuery(cqrs.QueryType, []byte) (cqrs.Query, error) {
+	panic("unimplemented")
 }
 
-func NewDecoder() *Decoder {
-	return &Decoder{}
+// EncodeEvent implements [cqrs.Codec].
+func (c *Codec) EncodeEvent(cqrs.Event) ([]byte, error) {
+	panic("unimplemented")
+}
+
+// EncodeResult implements [cqrs.Codec].
+func (c *Codec) EncodeResult(cqrs.Result) ([]byte, error) {
+	panic("unimplemented")
+}
+
+func NewCodec() cqrs.Codec {
+	return &Codec{}
 }
 
 const CommandTypeCreateNote cqrs.CommandType = "create_note"
@@ -77,16 +77,16 @@ func Notes() cqrs.QueryHandlerFunc {
 	return func(ctx context.Context, q cqrs.Query) (cqrs.Result, error) {
 		query := q.(NotesQuery)
 		fmt.Println(query.Type())
-		return cqrs.Result{}, nil
+		return nil, nil
 	}
 }
 
 func main() {
-	app := cqrs.NewApp()
+	app := cqrs.NewApp(slog.Default())
 	app.HandleCommand(CommandTypeCreateNote, CreateNote())
 	app.HandleEvent(EventTypeNoteCreated, OnNoteCreated())
 	app.HandleQuery(QueryTypeNotes, Notes())
-	controller := cqrs.NewController(slog.Default(), app, NewDecoder())
+	controller := cqrs.NewController(slog.Default(), app, NewCodec())
 	defer controller.Close()
 	server := &http.Server{
 		Addr:    ":8090",
