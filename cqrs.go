@@ -5,6 +5,7 @@ import "context"
 // CommandType
 type CommandType string
 
+// String
 func (ct CommandType) String() string { return string(ct) }
 
 // Command
@@ -15,12 +16,11 @@ type CommandHandlerFunc func(context.Context, Command) ([]Event, error)
 
 // CommandHandler
 type CommandHandler interface {
-	Types() []CommandType
 	Handle(context.Context, Command) ([]Event, error)
 }
 
 // CommandBus
-type CommandBus interface {
+type CommandBusPort interface {
 	CommandHandler
 	HandleFunc(CommandType, CommandHandlerFunc)
 }
@@ -28,27 +28,25 @@ type CommandBus interface {
 // QueryType
 type QueryType string
 
+// String
 func (qt QueryType) String() string { return string(qt) }
 
 // Query
 type Query interface{ Type() QueryType }
 
-type Result interface {
-	Data() any
-	Error() error
-}
+// Result
+type Result any
 
 // QueryHandlerFunc
 type QueryHandlerFunc func(context.Context, Query) (Result, error)
 
 // QueryHandler
 type QueryHandler interface {
-	Types() []QueryType
 	Handle(context.Context, Query) (Result, error)
 }
 
 // QueryBus
-type QueryBus interface {
+type QueryBusPort interface {
 	QueryHandler
 	HandleFunc(QueryType, QueryHandlerFunc)
 }
@@ -56,6 +54,7 @@ type QueryBus interface {
 // EventType
 type EventType string
 
+// String
 func (et EventType) String() string { return string(et) }
 
 // Event
@@ -68,12 +67,11 @@ type EventHandlerFunc func(context.Context, Event) error
 
 // EventHandler
 type EventHandler interface {
-	Types() []EventType
 	Handle(context.Context, Event) error
 }
 
 // EventBus
-type EventBus interface {
+type EventBusPort interface {
 	EventHandler
 	HandleFunc(EventType, EventHandlerFunc)
 }

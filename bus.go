@@ -8,33 +8,29 @@ import (
 	"sync"
 )
 
-type commandBus struct {
+type CommandBus struct {
 	logger *slog.Logger
 	bus    map[CommandType]CommandHandlerFunc
 	mu     sync.RWMutex
 }
 
-func NewCommandBus(logger *slog.Logger) CommandBus {
-	return &commandBus{
-		logger: logger,
+func NewCommandBus() *CommandBus {
+	return &CommandBus{
+		logger: slog.Default(),
 		bus:    make(map[CommandType]CommandHandlerFunc),
 		mu:     sync.RWMutex{},
 	}
 }
 
-// Types implements [CommandHandler].
-func (cb *commandBus) Types() []CommandType {
-	cb.mu.RLock()
-	defer cb.mu.RUnlock()
-	types := make([]CommandType, 0, len(cb.bus))
-	for t := range cb.bus {
-		types = append(types, t)
+func (cb *CommandBus) WithLogger(logger *slog.Logger) *CommandBus {
+	if logger != nil {
+		cb.logger = logger
 	}
-	return types
+	return cb
 }
 
 // Handle implements [CommandHandler].
-func (cb *commandBus) Handle(ctx context.Context, c Command) ([]Event, error) {
+func (cb *CommandBus) Handle(ctx context.Context, c Command) ([]Event, error) {
 	cb.mu.RLock()
 	f, ok := cb.bus[c.Type()]
 	cb.mu.RUnlock()
@@ -44,8 +40,8 @@ func (cb *commandBus) Handle(ctx context.Context, c Command) ([]Event, error) {
 	return f(ctx, c)
 }
 
-// HandleFunc implements [CommandBus].
-func (cb *commandBus) HandleFunc(t CommandType, f CommandHandlerFunc) {
+// HandleFunc implements [CommandBusPort].
+func (cb *CommandBus) HandleFunc(t CommandType, f CommandHandlerFunc) {
 	if f == nil {
 		cb.logger.
 			With(slog.String("command_type", t.String())).
@@ -69,33 +65,29 @@ func (cb *commandBus) HandleFunc(t CommandType, f CommandHandlerFunc) {
 	}
 }
 
-type queryBus struct {
+type QueryBus struct {
 	logger *slog.Logger
 	bus    map[QueryType]QueryHandlerFunc
 	mu     sync.RWMutex
 }
 
-func NewQueryBus(logger *slog.Logger) QueryBus {
-	return &queryBus{
-		logger: logger,
+func NewQueryBus() *QueryBus {
+	return &QueryBus{
+		logger: slog.Default(),
 		bus:    make(map[QueryType]QueryHandlerFunc),
 		mu:     sync.RWMutex{},
 	}
 }
 
-// Types implements [QueryHandler].
-func (qb *queryBus) Types() []QueryType {
-	qb.mu.RLock()
-	defer qb.mu.RUnlock()
-	types := make([]QueryType, 0, len(qb.bus))
-	for t := range qb.bus {
-		types = append(types, t)
+func (qb *QueryBus) WithLogger(logger *slog.Logger) *QueryBus {
+	if logger != nil {
+		qb.logger = logger
 	}
-	return types
+	return qb
 }
 
-// HandleFunc implements [QueryBus].
-func (qb *queryBus) HandleFunc(t QueryType, f QueryHandlerFunc) {
+// HandleFunc implements [QueryBusPort].
+func (qb *QueryBus) HandleFunc(t QueryType, f QueryHandlerFunc) {
 	if f == nil {
 		qb.logger.
 			With(slog.String("query_type", t.String())).
@@ -120,7 +112,7 @@ func (qb *queryBus) HandleFunc(t QueryType, f QueryHandlerFunc) {
 }
 
 // Handle implements [QueryHandler].
-func (qb *queryBus) Handle(ctx context.Context, q Query) (Result, error) {
+func (qb *QueryBus) Handle(ctx context.Context, q Query) (Result, error) {
 	qb.mu.RLock()
 	f, ok := qb.bus[q.Type()]
 	qb.mu.RUnlock()
@@ -130,22 +122,29 @@ func (qb *queryBus) Handle(ctx context.Context, q Query) (Result, error) {
 	return f(ctx, q)
 }
 
-type eventBus struct {
+type EventBus struct {
 	logger *slog.Logger
 	bus    map[EventType][]EventHandlerFunc
 	mu     sync.RWMutex
 }
 
-func NewEventBus(logger *slog.Logger) EventBus {
-	return &eventBus{
-		logger: logger,
+func NewEventBus() *EventBus {
+	return &EventBus{
+		logger: slog.Default(),
 		bus:    make(map[EventType][]EventHandlerFunc),
 		mu:     sync.RWMutex{},
 	}
 }
 
-// Types implements [EventHandler].
-func (eb *eventBus) Types() []EventType {
+func (eb *EventBus) WithLogger(logger *slog.Logger) *EventBus {
+	if logger != nil {
+		eb.logger = logger
+	}
+	return eb
+}
+
+// Types implements [EventHandlerPort].
+func (eb *EventBus) Types() []EventType {
 	eb.mu.RLock()
 	defer eb.mu.RUnlock()
 	types := make([]EventType, 0, len(eb.bus))
@@ -155,8 +154,8 @@ func (eb *eventBus) Types() []EventType {
 	return types
 }
 
-// HandleFunc implements [EventBus].
-func (eb *eventBus) HandleFunc(t EventType, f EventHandlerFunc) {
+// HandleFunc implements [EventBusPort].
+func (eb *EventBus) HandleFunc(t EventType, f EventHandlerFunc) {
 	if f == nil {
 		eb.logger.
 			With(slog.String("event_type", t.String())).
@@ -181,7 +180,7 @@ func (eb *eventBus) HandleFunc(t EventType, f EventHandlerFunc) {
 }
 
 // Handle implements [EventHandler].
-func (eb *eventBus) Handle(ctx context.Context, e Event) error {
+func (eb *EventBus) Handle(ctx context.Context, e Event) error {
 	eb.mu.RLock()
 	handlers := eb.bus[e.Type()]
 	eb.mu.RUnlock()
