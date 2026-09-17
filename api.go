@@ -22,34 +22,23 @@ func Trace(ctx context.Context) TraceID {
 }
 
 type CommandDecoder interface {
-	DecodeCommand(CommandType, []byte) (Command, error)
+	DecodeCommand([]byte) (Command, error)
+	CommandContentType() string
 }
 
-type QueryDecoder interface {
-	DecodeQuery(QueryType, []byte) (Query, error)
+type QueryCodec interface {
+	Decode([]byte) (Query, error)
+	Encode(Result) ([]byte, error)
+	ResultContentType() string
 }
 
 type EventEncoder interface {
-	EncodeEvent(Event) ([]byte, error)
+	Encode(Event) ([]byte, error)
+	EventContentType() string
 }
 
 type ResultEncoder interface {
-	EncodeResult(Result) ([]byte, error)
-}
-
-type Decoder interface {
-	CommandDecoder
-	QueryDecoder
-}
-
-type Encoder interface {
-	EventEncoder
-	ResultEncoder
-}
-
-type Codec interface {
-	Decoder
-	Encoder
+	Encode(Result) ([]byte, error)
 }
 
 type envelope struct {

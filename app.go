@@ -9,20 +9,17 @@ import (
 
 type App struct {
 	logger *slog.Logger
-	cb     CommandBus
-	eb     EventBus
-	qb     QueryBus
+	cb     CommandBusPort
+	eb     EventBusPort
+	qb     QueryBusPort
 }
 
-func NewApp(logger *slog.Logger) *App {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func New(cb CommandBusPort, qb QueryBusPort, eb EventBusPort) *App {
 	return &App{
-		logger: logger,
-		cb:     NewCommandBus(logger.With(slog.String("component", "CommandBus"))),
-		eb:     NewEventBus(logger.With(slog.String("component", "EventBus"))),
-		qb:     NewQueryBus(logger.With(slog.String("component", "QueryBus"))),
+		logger: slog.Default(),
+		cb:     cb,
+		eb:     eb,
+		qb:     qb,
 	}
 }
 
@@ -56,33 +53,14 @@ func (app *App) HandleCommand(t CommandType, f CommandHandlerFunc) {
 
 func (app *App) HandleQuery(t QueryType, f QueryHandlerFunc) { app.qb.HandleFunc(t, f) }
 func (app *App) HandleEvent(t EventType, f EventHandlerFunc) { app.eb.HandleFunc(t, f) }
-func (app *App) CommandHandler() CommandHandler              { return app.cb }
-func (app *App) QueryHandler() QueryHandler                  { return app.qb }
-func (app *App) EventHandler() EventHandler                  { return app.eb }
 
-func (app *App) WithEventBus(eb EventBus) *App {
-	if eb == nil {
-		app.logger.Debug("unimplemented EventBus")
-		return app
-	}
-	app.eb = eb
-	return app
-}
+func (app *App) CommandBus() CommandBusPort { return app.cb }
+func (app *App) QueryBus() QueryBusPort     { return app.qb }
+func (app *App) EventBus() EventBusPort     { return app.eb }
 
-func (app *App) WithCommandBus(cb CommandBus) *App {
-	if cb == nil {
-		app.logger.Debug("unimplemented CommandBus")
-		return app
+func (app *App) WithLogger(logger *slog.Logger) *App {
+	if logger != nil {
+		app.logger = logger
 	}
-	app.cb = cb
-	return app
-}
-
-func (app *App) WithQueryBus(qb QueryBus) *App {
-	if qb == nil {
-		app.logger.Debug("unimplemented QueryBus")
-		return app
-	}
-	app.qb = qb
 	return app
 }
