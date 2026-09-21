@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -22,43 +21,34 @@ func main() {
 	ctx, cancel := signal.NotifyContext(
 		context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	logger := slog.New(slog.NewTextHandler(
-		os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug},
-	)).With(slog.String("app", "test-to-do-app"))
 	repository := NewRepository()
-	// application setup
-	app := cqrs.New(
-		cqrs.NewCommandBus().WithLogger(logger),
-		cqrs.NewQueryBus().WithLogger(logger),
-		cqrs.NewEventBus().WithLogger(logger)).WithLogger(logger)
-	app.HandleCommand(CommandTypeCreateNote,
-		CreateNote(repository))
-	app.HandleQuery(QueryTypeGetNote,
-		GetNote(repository))
-	// controller setup
-	controller := cqrs.NewController(
-		cqrs.NewCommandController(app.CommandBus(), commandDecoders()).WithLogger(logger),
-		cqrs.NewEventController(app.EventBus(), eventEncoders()).WithLogger(logger),
-		cqrs.NewQueryController(app.QueryBus(), queryCodecs()).WithLogger(logger))
-	// start server
-	server := &http.Server{
-		Addr:    ":44044",
-		Handler: controller,
-	}
+	app := cqrs.New()
+	app.OnCommand(CommandTypeCreateNote,
+		TraceCommand(CreateNote(repository)))
+	app.OnQuery(QueryTypeGetNote,
+		TraceQuery(GetNote(repository)))
+	http.HandleFunc("GET /api/events", HttpEvents(app))
+	http.HandleFunc("GET /api/queries/get_note", HttpGetNote(app))
+	http.HandleFunc("POST /api/commands/create_note", HttpCreateNote(app))
 	go func() {
-		if err := server.ListenAndServe(); err != nil &&
+		if err := http.ListenAndServe(":8091", nil); err != nil &&
 			!errors.Is(err, http.ErrServerClosed) {
 			panic(err)
 		}
 	}()
 	<-ctx.Done()
-	if err := controller.Close(); err != nil {
-		logger.Error("failed to close controller",
-			slog.Any("error", err))
+	app.Close()
+}
+
+func TraceQuery(next cqrs.QueryHandlerFunc) cqrs.QueryHandlerFunc {
+	return func(ctx context.Context, q cqrs.Query) (cqrs.Result, error) {
+		return next(context.WithValue(ctx, "trace_id", "trace_query"), q)
 	}
-	if err := server.Shutdown(context.TODO()); err != nil {
-		logger.Error("failed to shutdown server",
-			slog.Any("error", err))
+}
+
+func TraceCommand(next cqrs.CommandHandlerFunc) cqrs.CommandHandlerFunc {
+	return func(ctx context.Context, c cqrs.Command) ([]cqrs.Event, error) {
+		return next(context.WithValue(ctx, "trace_id", "trace_command"), c)
 	}
 }
 
@@ -170,7 +160,7 @@ func (r *Repository) SaveNote(ctx context.Context, note Note) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.store[note.ID] = note
-	fmt.Println("note saved", cqrs.Trace(ctx).String())
+	fmt.Println("note saved", note.ID)
 	return nil
 }
 
@@ -183,77 +173,67 @@ func NewRepository() *Repository {
 
 // API LAYER
 
-type CreateNoteCommandDecoder struct{}
-
-func NewCreateNoteCommandDecoder() cqrs.CommandDecoder {
-	return &CreateNoteCommandDecoder{}
-}
-
-// CommandContentType implements [cqrs.CommandDecoder].
-func (c *CreateNoteCommandDecoder) CommandContentType() string { return "application/json" }
-
-// DecodeCommand implements [cqrs.CommandDecoder].
-func (c *CreateNoteCommandDecoder) DecodeCommand(data []byte) (cqrs.Command, error) {
-	var cmd CreateNoteCommand
-	if err := json.Unmarshal(data, &cmd); err != nil {
-		return nil, err
-	}
-	return cmd, nil
-}
-
-func commandDecoders() map[cqrs.CommandType]cqrs.CommandDecoder {
-	return map[cqrs.CommandType]cqrs.CommandDecoder{
-		CommandTypeCreateNote: NewCreateNoteCommandDecoder(),
+func HttpCreateNote(handler cqrs.CommandHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var cmd CreateNoteCommand
+		if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := handler.HandleCommand(r.Context(), cmd); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
-type GetNoteQueryCodec struct{}
-
-// Decode implements [cqrs.QueryCodec].
-func (c *GetNoteQueryCodec) Decode(data []byte) (cqrs.Query, error) {
-	query, err := url.ParseQuery(string(data))
-	if err != nil {
-		return nil, err
-	}
-	return GetNoteQuery{NoteID: query.Get("id")}, nil
-}
-
-// Encode implements [cqrs.QueryCodec].
-func (c *GetNoteQueryCodec) Encode(result cqrs.Result) ([]byte, error) {
-	return json.Marshal(result)
-}
-
-// ResultContentType implements [cqrs.QueryCodec].
-func (c *GetNoteQueryCodec) ResultContentType() string { return "application/json" }
-
-func NewGetNoteQueryCodec() cqrs.QueryCodec {
-	return &GetNoteQueryCodec{}
-}
-
-func queryCodecs() map[cqrs.QueryType]cqrs.QueryCodec {
-	return map[cqrs.QueryType]cqrs.QueryCodec{
-		QueryTypeGetNote: NewGetNoteQueryCodec(),
+func HttpGetNote(handler cqrs.QueryHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		res, err := handler.HandleQuery(r.Context(), GetNoteQuery{
+			NoteID: r.URL.Query().Get("note_id"),
+		})
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(res)
 	}
 }
 
-type NoteCreatedEventEncoder struct{}
+func HttpEvents(handler cqrs.EventStreamer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusBadRequest)
+			return
+		}
 
-// Encode implements [cqrs.EventEncoder].
-func (n *NoteCreatedEventEncoder) Encode(event cqrs.Event) ([]byte, error) {
-	return json.Marshal(event)
-}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
 
-// EventContentType implements [cqrs.EventEncoder].
-func (n *NoteCreatedEventEncoder) EventContentType() string {
-	return "application/json"
-}
-
-func NewNoteCreatedEventEncoder() cqrs.EventEncoder {
-	return &NoteCreatedEventEncoder{}
-}
-
-func eventEncoders() map[cqrs.EventType]cqrs.EventEncoder {
-	return map[cqrs.EventType]cqrs.EventEncoder{
-		EventTypeNoteCreated: NewNoteCreatedEventEncoder(),
+		stream, err := handler.EventStream(r.Context())
+		if err != nil {
+			if errors.Is(err, io.ErrClosedPipe) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		for event := range stream {
+			fmt.Fprintf(w, "event: %s\n", event.Type().String())
+			fmt.Fprint(w, "data: ")
+			if err := json.NewEncoder(w).Encode(event); err != nil {
+				return
+			}
+			fmt.Fprint(w, "\n")
+			flusher.Flush()
+		}
 	}
 }
