@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/atmosone/cqrs"
-	"github.com/google/uuid"
 )
 
 func main() {
@@ -69,7 +68,7 @@ func CreateNote(repository CreateNoteRepositoryPort) cqrs.CommandHandlerFunc {
 	return func(ctx context.Context, c cqrs.Command) ([]cqrs.Event, error) {
 		cmd := c.(CreateNoteCommand)
 		note := Note{
-			ID:        uuid.NewString(),
+			ID:        "new note",
 			Name:      cmd.NoteName,
 			Content:   cmd.NoteContent,
 			CreatedAt: time.Now(),
