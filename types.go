@@ -34,6 +34,5 @@ type EventType string
 // String returns base [EventType] string value.
 func (et EventType) String() string { return string(et) }
 
-// EventHandlerFunc is the type for functions that can handle [Event]
-// Returns non-nil [error] if [Event] cannot be handled.
-type EventHandlerFunc func(context.Context, Event) error
+// EventHandlerFunc is the type for "silent" functions that can handle [Event].
+type EventHandlerFunc func(context.Context, Event)

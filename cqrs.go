@@ -6,152 +6,155 @@ package cqrs
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 )
 
 // ErrUnimplementedHandler - error value for unimplemented handler cases.
 var ErrUnimplementedHandler = errors.New("cqrs: unimplemented handler")
 
-type commandBus map[CommandType]CommandHandlerFunc
+type commandBus struct {
+	router map[CommandType]CommandHandlerFunc
+	closed atomic.Bool
+}
 
-func (cb commandBus) Close() error {
-	cb = make(commandBus)
+func (cb *commandBus) Close() error {
+	if !cb.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	cb.router = make(map[CommandType]CommandHandlerFunc)
 	return nil
 }
 
-func (cb commandBus) HandleCommand(ctx context.Context, c Command) error {
-	f, ok := cb[c.Type()]
+func (cb *commandBus) HandleCommand(ctx context.Context, c Command) error {
+	if cb.closed.Load() {
+		return io.ErrClosedPipe
+	}
+	f, ok := cb.router[c.Type()]
 	if !ok {
 		return ErrUnimplementedHandler
 	}
-	if _, err := f(ctx, c); err != nil {
-		return err
-	}
-	return nil
+	_, err := f(ctx, c)
+	return err
+
 }
 
-func (cb commandBus) OnCommand(t CommandType, f CommandHandlerFunc) {
+func (cb *commandBus) OnCommand(t CommandType, f CommandHandlerFunc) {
 	if f == nil {
 		return
 	}
-	cb[t] = func(ctx context.Context, c Command) (events []Event, err error) {
+	cb.router[t] = func(ctx context.Context, c Command) ([]Event, error) {
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("%v", r)
+				// Prevent goroutine panic crash
 			}
 		}()
 		return f(ctx, c)
 	}
 }
 
-type queryBus map[QueryType]QueryHandlerFunc
+type queryBus struct {
+	router map[QueryType]QueryHandlerFunc
+	closed atomic.Bool
+}
 
-func (qb queryBus) Close() error {
-	qb = make(queryBus)
+func (qb *queryBus) Close() error {
+	if !qb.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	qb.router = make(map[QueryType]QueryHandlerFunc)
 	return nil
 }
 
-func (qb queryBus) OnQuery(t QueryType, f QueryHandlerFunc) {
+func (qb *queryBus) OnQuery(t QueryType, f QueryHandlerFunc) {
 	if f == nil {
 		return
 	}
-	qb[t] = func(ctx context.Context, q Query) (result Result, err error) {
+	qb.router[t] = func(ctx context.Context, q Query) (Result, error) {
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("%v", r)
+				// Prevent goroutine panic crash
 			}
 		}()
 		return f(ctx, q)
 	}
 }
 
-func (qb queryBus) HandleQuery(ctx context.Context, q Query) (Result, error) {
-	f, ok := qb[q.Type()]
+func (qb *queryBus) HandleQuery(ctx context.Context, q Query) (Result, error) {
+	if qb.closed.Load() {
+		return nil, io.ErrClosedPipe
+	}
+	f, ok := qb.router[q.Type()]
 	if !ok {
 		return nil, ErrUnimplementedHandler
 	}
 	return f(ctx, q)
 }
 
-type eventBus map[EventType][]EventHandlerFunc
+type eventBus struct {
+	router map[EventType][]EventHandlerFunc
+	closed atomic.Bool
+}
 
-func (eb eventBus) Close() error {
-	eb = make(eventBus)
+func (eb *eventBus) Close() error {
+	if !eb.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	eb.router = make(map[EventType][]EventHandlerFunc)
 	return nil
 }
 
-func (eb eventBus) OnEvent(t EventType, f EventHandlerFunc) {
+func (eb *eventBus) OnEvent(t EventType, f EventHandlerFunc) {
 	if f == nil {
 		return
 	}
-	eb[t] = append(eb[t], func(ctx context.Context, e Event) (err error) {
+	eb.router[t] = append(eb.router[t], func(ctx context.Context, e Event) {
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("%v", r)
+				// Prevent goroutine panic crash
 			}
 		}()
-		return f(ctx, e)
+		f(ctx, e)
 	})
 }
 
-func (eb eventBus) HandleEvent(ctx context.Context, e Event) error {
-	handlers := eb[e.Type()]
+func (eb *eventBus) HandleEvent(ctx context.Context, e Event) {
+	if eb.closed.Load() {
+		return
+	}
+	handlers := eb.router[e.Type()]
 	if len(handlers) == 0 {
-		return nil
+		return
 	}
-	var errs []error
 	for _, f := range handlers {
-		if err := f(ctx, e); err != nil {
-			errs = append(errs, err)
-		}
+		f(ctx, e)
 	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
 }
 
 type app struct {
-	cb commandBusPort
-	qb queryBusPort
-	eb eventBusPort
-	es eventSourcePort
+	cb CommandBusPort
+	qb QueryBusPort
+	eb EventBusPort
+	es EventSourcePort
 }
 
 func (app *app) Close() error {
-	var errs []error
-	if err := app.cb.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	if err := app.qb.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	if err := app.eb.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	if err := app.es.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
+	return errors.Join(
+		app.cb.Close(),
+		app.qb.Close(),
+		app.eb.Close(),
+		app.es.Close(),
+	)
 }
 
 // New returns new CQRS application facade instance.
 func New() App {
 	return &app{
-		cb: make(commandBus),
-		qb: make(queryBus),
-		eb: make(eventBus),
-		es: &eventSource{
-			closed:  false,
-			streams: make(map[chan Event]context.CancelFunc),
-			wg:      sync.WaitGroup{},
-			mu:      sync.RWMutex{},
-		},
+		cb: &commandBus{router: make(map[CommandType]CommandHandlerFunc)},
+		qb: &queryBus{router: make(map[QueryType]QueryHandlerFunc)},
+		eb: &eventBus{router: make(map[EventType][]EventHandlerFunc)},
+		es: &eventSource{streams: make(map[chan Event]context.CancelFunc)},
 	}
 }
 
@@ -164,17 +167,11 @@ func (app *app) OnCommand(t CommandType, f CommandHandlerFunc) {
 		if len(events) == 0 {
 			return nil, nil
 		}
-		var errs []error
 		for _, event := range events {
-			// Event sourcing
+			// Projections and local handlers run synchronously first.
+			app.eb.HandleEvent(ctx, event)
+			// Stream subscribers receive the event afterwards.
 			app.es.HandleEvent(ctx, event)
-			// Event handling
-			if err := app.eb.HandleEvent(ctx, event); err != nil {
-				errs = append(errs, err)
-			}
-		}
-		if len(errs) > 0 {
-			return events, errors.Join(errs...)
 		}
 		return events, nil
 	})
@@ -201,8 +198,8 @@ func (app *app) HandleQuery(ctx context.Context, query Query) (Result, error) {
 	return app.qb.HandleQuery(ctx, query)
 }
 
-func (app *app) HandleEvent(ctx context.Context, event Event) error {
-	return app.eb.HandleEvent(ctx, event)
+func (app *app) HandleEvent(ctx context.Context, event Event) {
+	app.eb.HandleEvent(ctx, event)
 }
 
 func (app *app) EventStream(ctx context.Context) (<-chan Event, error) {
@@ -210,10 +207,10 @@ func (app *app) EventStream(ctx context.Context) (<-chan Event, error) {
 }
 
 type eventSource struct {
-	closed  bool
 	streams map[chan Event]context.CancelFunc
 	wg      sync.WaitGroup
 	mu      sync.RWMutex
+	closed  bool
 }
 
 func (es *eventSource) EventStream(ctx context.Context) (<-chan Event, error) {
@@ -244,6 +241,7 @@ func (es *eventSource) Close() error {
 		es.mu.Unlock()
 		return nil
 	}
+	es.closed = true
 	for _, cancel := range es.streams {
 		cancel()
 	}
@@ -252,38 +250,30 @@ func (es *eventSource) Close() error {
 	return nil
 }
 
-func (es *eventSource) HandleEvent(ctx context.Context, event Event) error {
+func (es *eventSource) HandleEvent(ctx context.Context, event Event) {
 	es.mu.RLock()
 	if es.closed {
 		es.mu.RUnlock()
-		return io.ErrClosedPipe
+		return
+	}
+	es.wg.Add(1)
+	defer es.wg.Done()
+	var slowConsumers []chan Event
+	for stream := range es.streams {
+		select {
+		case stream <- event:
+		default:
+			slowConsumers = append(slowConsumers, stream)
+		}
 	}
 	es.mu.RUnlock()
-	es.wg.Go(func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// Prevent goroutine panic crash
-			}
-		}()
-		es.mu.RLock()
-		var slowConsumers []chan Event
-		for stream := range es.streams {
-			select {
-			case stream <- event:
-			default:
-				slowConsumers = append(slowConsumers, stream)
+	if len(slowConsumers) > 0 {
+		es.mu.Lock()
+		for _, stream := range slowConsumers {
+			if cancel, ok := es.streams[stream]; ok {
+				cancel()
 			}
 		}
-		es.mu.RUnlock()
-		if len(slowConsumers) > 0 {
-			es.mu.Lock()
-			for _, stream := range slowConsumers {
-				if cancel, ok := es.streams[stream]; ok {
-					cancel()
-				}
-			}
-			es.mu.Unlock()
-		}
-	})
-	return nil
+		es.mu.Unlock()
+	}
 }
