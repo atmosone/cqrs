@@ -20,13 +20,16 @@ type CommandHandler interface {
 // CommandRegistry is the interface implemented by types that can register
 // [CommandHandlerFunc] for [CommandType] value.
 type CommandRegistry interface {
-	OnCommand(CommandType, CommandHandlerFunc) // OnCommand registers [CommandHandlerFunc] for [CommandType] value.
+	// OnCommand registers [CommandHandlerFunc] for [CommandType] value.
+	//
+	// Note: for composition root usage only, not for dynamic [CommandHandlerFunc] registration.
+	OnCommand(CommandType, CommandHandlerFunc)
 }
 
-// commandBusPort is the interface implemented by types that can route [Command] types
+// CommandBusPort is the interface implemented by types that can route [Command] types
 // to it's [CommandHandlerFunc] by it's [CommandType] value
 // and implementing the [CommandHandler] interface to provide a single entry point for all commands.
-type commandBusPort interface {
+type CommandBusPort interface {
 	io.Closer
 	CommandHandler
 	CommandRegistry
@@ -46,13 +49,16 @@ type QueryHandler interface {
 // QueryRegistry is the interface implemented by types that can register
 // [QueryHandlerFunc] for [QueryType] value.
 type QueryRegistry interface {
-	OnQuery(QueryType, QueryHandlerFunc) // OnQuery registers [QueryHandlerFunc] for [QueryType] value.
+	// OnQuery registers [QueryHandlerFunc] for [QueryType] value.
+	//
+	// Note: for composition root usage only, not for dynamic [QueryHandlerFunc] registration.
+	OnQuery(QueryType, QueryHandlerFunc)
 }
 
-// queryBusPort is the interface implemented by types that can route [Query] types
+// QueryBusPort is the interface implemented by types that can route [Query] types
 // to it's [QueryHandlerFunc] by it's [QueryType] value
 // and implementing the [QueryHandler] interface to provide a single entry point for all queries.
-type queryBusPort interface {
+type QueryBusPort interface {
 	io.Closer
 	QueryHandler
 	QueryRegistry
@@ -66,19 +72,22 @@ type Event interface {
 
 // EventHandler is the interface implemented by types that can handle [Event].
 type EventHandler interface {
-	HandleEvent(context.Context, Event) error // HandleEvent implements [EventHandlerFunc].
+	HandleEvent(context.Context, Event) // HandleEvent implements [EventHandlerFunc].
 }
 
 // EventRegistry is the interface implemented by types that can register
 // [EventHandlerFunc] for [EventType] value.
 type EventRegistry interface {
-	OnEvent(EventType, EventHandlerFunc) // OnEvent registers [EventHandlerFunc] for [EventType] value.
+	// OnEvent registers [EventHandlerFunc] for [EventType] value.
+	//
+	// Note: for composition root usage only, not for dynamic [EventHandlerFunc] registration.
+	OnEvent(EventType, EventHandlerFunc)
 }
 
-// eventBusPort is the interface implemented by types that can route [Event] types
+// EventBusPort is the interface implemented by types that can route [Event] types
 // to it's [EventHandlerFunc] by it's [EventType] value
 // and implementing the [EventHandler] interface to provide a single entry point for all events.
-type eventBusPort interface {
+type EventBusPort interface {
 	io.Closer
 	EventHandler
 	EventRegistry
@@ -116,9 +125,9 @@ type EventStreamer interface {
 	EventStream(context.Context) (<-chan Event, error)
 }
 
-// eventSourcePort is the interface implemented by types that can accept [Event] as [EventHandler] and
+// EventSourcePort is the interface implemented by types that can accept [Event] as [EventHandler] and
 // broadcast it as [EventStreamer].
-type eventSourcePort interface {
+type EventSourcePort interface {
 	io.Closer
 	EventHandler
 	EventStreamer
