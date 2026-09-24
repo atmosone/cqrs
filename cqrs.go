@@ -15,9 +15,12 @@ import (
 var ErrUnimplementedHandler = errors.New("cqrs: unimplemented handler")
 
 type commandBus struct {
-	router map[CommandType]CommandHandlerFunc
-	closed atomic.Bool
+	router  map[CommandType]CommandHandlerFunc
+	onPanic PanicHook
+	closed  atomic.Bool
 }
+
+func (cb *commandBus) OnPanic(h PanicHook) { cb.onPanic = h }
 
 func (cb *commandBus) Close() error {
 	if !cb.closed.CompareAndSwap(false, true) {
@@ -46,8 +49,9 @@ func (cb *commandBus) OnCommand(t CommandType, f CommandHandlerFunc) {
 	}
 	cb.router[t] = func(ctx context.Context, c Command) ([]Event, error) {
 		defer func() {
-			if r := recover(); r != nil {
-				// Prevent goroutine panic crash
+			if r := recover(); r != nil &&
+				cb.onPanic != nil {
+				cb.onPanic(r)
 			}
 		}()
 		return f(ctx, c)
@@ -55,9 +59,12 @@ func (cb *commandBus) OnCommand(t CommandType, f CommandHandlerFunc) {
 }
 
 type queryBus struct {
-	router map[QueryType]QueryHandlerFunc
-	closed atomic.Bool
+	router  map[QueryType]QueryHandlerFunc
+	onPanic PanicHook
+	closed  atomic.Bool
 }
+
+func (qb *queryBus) OnPanic(h PanicHook) { qb.onPanic = h }
 
 func (qb *queryBus) Close() error {
 	if !qb.closed.CompareAndSwap(false, true) {
@@ -73,8 +80,9 @@ func (qb *queryBus) OnQuery(t QueryType, f QueryHandlerFunc) {
 	}
 	qb.router[t] = func(ctx context.Context, q Query) (Result, error) {
 		defer func() {
-			if r := recover(); r != nil {
-				// Prevent goroutine panic crash
+			if r := recover(); r != nil &&
+				qb.onPanic != nil {
+				qb.onPanic(r)
 			}
 		}()
 		return f(ctx, q)
@@ -93,8 +101,9 @@ func (qb *queryBus) HandleQuery(ctx context.Context, q Query) (Result, error) {
 }
 
 type eventBus struct {
-	router map[EventType][]EventHandlerFunc
-	closed atomic.Bool
+	router  map[EventType][]EventHandlerFunc
+	onPanic PanicHook
+	closed  atomic.Bool
 }
 
 func (eb *eventBus) Close() error {
@@ -105,14 +114,17 @@ func (eb *eventBus) Close() error {
 	return nil
 }
 
+func (eb *eventBus) OnPanic(h PanicHook) { eb.onPanic = h }
+
 func (eb *eventBus) OnEvent(t EventType, f EventHandlerFunc) {
 	if f == nil {
 		return
 	}
 	eb.router[t] = append(eb.router[t], func(ctx context.Context, e Event) {
 		defer func() {
-			if r := recover(); r != nil {
-				// Prevent goroutine panic crash
+			if r := recover(); r != nil &&
+				eb.onPanic != nil {
+				eb.onPanic(r)
 			}
 		}()
 		f(ctx, e)
@@ -133,13 +145,25 @@ func (eb *eventBus) HandleEvent(ctx context.Context, e Event) {
 }
 
 type app struct {
-	cb CommandBusPort
-	qb QueryBusPort
-	eb EventBusPort
-	es EventSourcePort
+	cb      CommandBusPort
+	qb      QueryBusPort
+	eb      EventBusPort
+	es      EventSourcePort
+	onClose Hook
+}
+
+func (app *app) OnClose(h Hook) { app.onClose = h }
+
+func (app *app) OnPanic(h PanicHook) {
+	app.cb.OnPanic(h)
+	app.qb.OnPanic(h)
+	app.eb.OnPanic(h)
 }
 
 func (app *app) Close() error {
+	if app.onClose != nil {
+		app.onClose()
+	}
 	return errors.Join(
 		app.cb.Close(),
 		app.qb.Close(),

@@ -36,3 +36,9 @@ func (et EventType) String() string { return string(et) }
 
 // EventHandlerFunc is the type for "silent" functions that can handle [Event].
 type EventHandlerFunc func(context.Context, Event)
+
+// Hook is the type for function that can customize internal behavior.
+type Hook func()
+
+// PanicHook is the type for function that call after [recover] and can handle panic.
+type PanicHook func(r any)
