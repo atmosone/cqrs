@@ -33,6 +33,7 @@ type CommandBusPort interface {
 	io.Closer
 	CommandHandler
 	CommandRegistry
+	PanicHandler
 }
 
 // Query is the interface implemented by types that contains instructions
@@ -62,6 +63,7 @@ type QueryBusPort interface {
 	io.Closer
 	QueryHandler
 	QueryRegistry
+	PanicHandler
 }
 
 // Event is the interface implemented by types that contains data
@@ -91,6 +93,7 @@ type EventBusPort interface {
 	io.Closer
 	EventHandler
 	EventRegistry
+	PanicHandler
 }
 
 // Projection is the interface implemented by types that can collect and transform system [Event]
@@ -117,7 +120,8 @@ type App interface {
 	EventHandler
 	EventStreamer
 	ProjectionBuilder
-	io.Closer
+	PanicHandler
+	CloseHandler
 }
 
 // EventStreamer is the interface implemented by types that can stream [Event] via channel.
@@ -131,4 +135,18 @@ type EventSourcePort interface {
 	io.Closer
 	EventHandler
 	EventStreamer
+}
+
+// CloseHandler is the interface implemented by types that implements [io.Closer]
+// and call registered hook for graceful shutdown.
+type CloseHandler interface {
+	io.Closer
+	// OnClose registers hook function for on close action logic.
+	OnClose(Hook)
+}
+
+// PanicHandler is the interface for types that can handle recovered panic.
+type PanicHandler interface {
+	// OnPanic register panic handler function.
+	OnPanic(PanicHook)
 }
